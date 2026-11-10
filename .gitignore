@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# IDE files
+.vscode
+*_debug_bin.*
+
+# Go coverage output
+*.out
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# tmp folder
+tmp/
