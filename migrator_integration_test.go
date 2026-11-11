@@ -24,9 +24,9 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func mustMigrate(ctx context.Context, t *testing.T, s *Set, fga *client.OpenFgaClient) {
+func mustMigrate(ctx context.Context, t *testing.T, s *Migrations, fga *client.OpenFgaClient) {
 	t.Helper()
-	if err := s.Migrate(ctx, fga); err != nil {
+	if err := NewMigrator(fga, s).Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 }
@@ -151,18 +151,22 @@ func latestIsModel(ctx context.Context, fga *client.OpenFgaClient, want *openfga
 	return sameModel(latest, want)
 }
 
-func assertAtVersion(ctx context.Context, t *testing.T, s *Set, fga *client.OpenFgaClient) {
+func assertAtVersion(ctx context.Context, t *testing.T, s *Migrations, fga *client.OpenFgaClient) {
 	t.Helper()
-	if err := VerifySchemaVersion(ctx, fga, s.Required()); err != nil {
+	if err := NewMigrator(fga, s).Verify(ctx); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if same, err := latestIs(ctx, fga, s.Model()); err != nil || !same {
-		t.Fatalf("latest model is not the set's model (same=%v, err=%v)", same, err)
+	latest, err := s.latest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, err := latestIsModel(ctx, fga, latest.model); err != nil || !same {
+		t.Fatalf("latest model is not the highest version's model (same=%v, err=%v)", same, err)
 	}
 }
 
-// renameSet records the model each step sees.
-func renameSet(seen map[string]string) *Set {
+// renameMigrations records the model each step sees.
+func renameMigrations(t *testing.T, seen map[string]string) *Migrations {
 	observe := func(step string) Step {
 		return func(ctx context.Context, fga *client.OpenFgaClient) error {
 			seen[step] = "none"
@@ -220,7 +224,7 @@ func renameSet(seen map[string]string) *Set {
 			}}).Execute()
 		return err
 	}
-	return MustSet(3,
+	return mustMigrations(t,
 		Migration{Version: 1, Name: "baseline", Model: v1Model, Before: observe("1.before"), After: observe("1.after")},
 		Migration{Version: 2, Name: "add_writer", Model: v2Model, Before: observe("2.before"), After: and(observe("2.after"), copyEditors)},
 		Migration{Version: 3, Name: "drop_editor", Model: v3Model, Before: and(observe("3.before"), dropEditors), After: observe("3.after")},
@@ -230,7 +234,7 @@ func renameSet(seen map[string]string) *Set {
 func TestMigrateFreshStore(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	s := mustSet(t, baseline())
+	s := mustMigrations(t, baseline())
 
 	if v := storedVersion(ctx, t, fga); v != 0 {
 		t.Fatalf("fresh store version = %d, want 0", v)
@@ -250,12 +254,12 @@ func TestMigrateFreshStore(t *testing.T) {
 func TestMigrateRerunIsNoop(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	s := renameSet(map[string]string{})
+	s := renameMigrations(t, map[string]string{})
 	mustMigrate(ctx, t, s, fga)
 	models, stamped := modelCount(ctx, t, fga), markers(ctx, t, fga)
 
 	seen := map[string]string{}
-	again := renameSet(seen)
+	again := renameMigrations(t, seen)
 	mustMigrate(ctx, t, again, fga)
 
 	if got := modelCount(ctx, t, fga); got != models {
@@ -273,11 +277,11 @@ func TestMigrateRerunIsNoop(t *testing.T) {
 func TestMigrateRefusesDowngrade(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	s := mustSet(t, baseline())
+	s := mustMigrations(t, baseline())
 	mustMigrate(ctx, t, s, fga)
 	writeTuples(ctx, t, fga, client.ClientTupleKey{User: markerUser(2), Relation: markerRelation, Object: markerObject})
 
-	err := s.Migrate(ctx, fga)
+	err := NewMigrator(fga, s).Migrate(ctx)
 	if err == nil || !strings.Contains(err.Error(), "refusing to downgrade") {
 		t.Fatalf("migrate with a newer store: err = %v, want downgrade refusal", err)
 	}
@@ -299,7 +303,7 @@ func TestMigrateLegacyModelWithoutMarkerType(t *testing.T) {
 		t.Fatalf("legacy store version = %d, want 0", v)
 	}
 
-	s := mustSet(t, baseline())
+	s := mustMigrations(t, baseline())
 	mustMigrate(ctx, t, s, fga)
 
 	assertAtVersion(ctx, t, s, fga)
@@ -315,7 +319,7 @@ func TestMigrateAppliesMigrationsOneAtATime(t *testing.T) {
 	writeTuples(ctx, t, fga, client.ClientTupleKey{User: "user:7", Relation: "editor", Object: "document:1"})
 
 	seen := map[string]string{}
-	s := renameSet(seen)
+	s := renameMigrations(t, seen)
 	mustMigrate(ctx, t, s, fga)
 
 	want := map[string]string{
@@ -339,8 +343,8 @@ func TestMigrateAppliesMigrationsOneAtATime(t *testing.T) {
 		t.Fatalf("editor tuples left after v3: %v", got)
 	}
 
-	if err := mustSet(t, baseline()).Migrate(ctx, fga); err == nil {
-		t.Fatal("version-1 set accepted a version-3 store")
+	if err := NewMigrator(fga, mustMigrations(t, baseline())).Migrate(ctx); err == nil {
+		t.Fatal("version-1 collection accepted a version-3 store")
 	}
 }
 
@@ -358,13 +362,13 @@ func TestMigrateResumesAfterAFailedMigration(t *testing.T) {
 		}
 	}
 	failing := true
-	s := MustSet(3,
+	s := mustMigrations(t,
 		Migration{Version: 1, Name: "baseline", Model: v1Model, After: count("1.after", nil)},
 		Migration{Version: 2, Name: "add_writer", Model: v2Model, Before: count("2.before", nil), After: count("2.after", &failing)},
 		Migration{Version: 3, Name: "drop_editor", Model: v3Model, Before: count("3.before", nil)},
 	)
 
-	err := s.Migrate(ctx, fga)
+	err := NewMigrator(fga, s).Migrate(ctx)
 	if err == nil || !strings.Contains(err.Error(), "migration 2 add_writer") {
 		t.Fatalf("err = %v, want a migration 2 failure", err)
 	}
@@ -395,7 +399,7 @@ func TestMigrateAfterOldWriterOverwroteModel(t *testing.T) {
 	fga, _ := fgatest.NewStore(ctx, t)
 	writeUnmarked(ctx, t, fga, v1Model)
 	writeTuples(ctx, t, fga, client.ClientTupleKey{User: "user:7", Relation: "editor", Object: "document:1"})
-	mustMigrate(ctx, t, renameSet(map[string]string{}), fga)
+	mustMigrate(ctx, t, renameMigrations(t, map[string]string{}), fga)
 	stamped := markers(ctx, t, fga)
 
 	writeUnmarked(ctx, t, fga, v1Model)
@@ -408,7 +412,7 @@ func TestMigrateAfterOldWriterOverwroteModel(t *testing.T) {
 	}
 
 	seen := map[string]string{}
-	s := renameSet(seen)
+	s := renameMigrations(t, seen)
 	mustMigrate(ctx, t, s, fga)
 
 	assertAtVersion(ctx, t, s, fga)
@@ -426,7 +430,7 @@ func TestMigrateAfterOldWriterOverwroteModel(t *testing.T) {
 func TestMigrateRepairsDriftedModelAtRequiredVersion(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	s := mustSet(t, baseline(), Migration{Version: 2, Name: "add_writer", Model: v2Model})
+	s := mustMigrations(t, baseline(), addWriter())
 	mustMigrate(ctx, t, s, fga)
 	writeMarked(ctx, t, fga, v1Model)
 
@@ -438,7 +442,7 @@ func TestMigrateRepairsDriftedModelAtRequiredVersion(t *testing.T) {
 func TestMigrateRejectsPinnedClient(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	s := mustSet(t, baseline())
+	s := mustMigrations(t, baseline())
 	mustMigrate(ctx, t, s, fga)
 	latest, err := LatestModel(ctx, fga)
 	if err != nil {
@@ -447,7 +451,7 @@ func TestMigrateRejectsPinnedClient(t *testing.T) {
 	if err := fga.SetAuthorizationModelId(latest.Id); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Migrate(ctx, fga); err == nil || !strings.Contains(err.Error(), "not pinned") {
+	if err := NewMigrator(fga, s).Migrate(ctx); err == nil || !strings.Contains(err.Error(), "not pinned") {
 		t.Fatalf("err = %v, want a pinned-client refusal", err)
 	}
 }
@@ -469,5 +473,48 @@ func TestStoredVersionWithoutMarkers(t *testing.T) {
 	writeMarked(ctx, t, fga, v1Model)
 	if v := storedVersion(ctx, t, fga); v != 0 {
 		t.Fatalf("version = %d, want 0", v)
+	}
+}
+
+func TestStatusFollowsTheStoredVersion(t *testing.T) {
+	ctx := testContext(t)
+	fga, _ := fgatest.NewStore(ctx, t)
+	applied := func(s *Migrations) []bool {
+		t.Helper()
+		statuses, err := NewMigrator(fga, s).Status(ctx)
+		if err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		out := make([]bool, 0, len(statuses))
+		for i, status := range statuses {
+			if status.Version != i+1 || status.Name == "" {
+				t.Fatalf("status %d = %+v", i, status)
+			}
+			out = append(out, status.Applied)
+		}
+		return out
+	}
+	all := mustMigrations(t, baseline(), addWriter(), dropEditor())
+
+	if got := applied(all); !slices.Equal(got, []bool{false, false, false}) {
+		t.Fatalf("fresh store status = %v", got)
+	}
+	mustMigrate(ctx, t, mustMigrations(t, baseline(), addWriter()), fga)
+	if got := applied(all); !slices.Equal(got, []bool{true, true, false}) {
+		t.Fatalf("status at version 2 = %v", got)
+	}
+	if err := NewMigrator(fga, all).Verify(ctx); err == nil {
+		t.Fatal("verify passed with a pending migration")
+	}
+}
+
+func TestMigrateRejectsInvalidMigrations(t *testing.T) {
+	ctx := testContext(t)
+	fga, _ := fgatest.NewStore(ctx, t)
+	if err := NewMigrator(fga, NewMigrations()).Migrate(ctx); err == nil || !strings.Contains(err.Error(), "no migrations") {
+		t.Fatalf("err = %v, want no migrations", err)
+	}
+	if got := modelCount(ctx, t, fga); got != 0 {
+		t.Fatalf("an invalid collection wrote %d models", got)
 	}
 }

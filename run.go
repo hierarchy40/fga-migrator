@@ -14,7 +14,11 @@ import (
 const pollInterval = 2 * time.Second
 
 // Run waits up to waitTimeout for OpenFGA, resolves or creates the store, migrates and verifies it.
-func Run(ctx context.Context, cfg Config, set *Set, waitTimeout time.Duration) error {
+func Run(ctx context.Context, cfg Config, migrations *Migrations, waitTimeout time.Duration) error {
+	required, err := migrations.Required()
+	if err != nil {
+		return fmt.Errorf("invalid migrations: %w", err)
+	}
 	cfg = cfg.WithDefaults()
 	fga, err := cfg.NewClient()
 	if err != nil {
@@ -30,13 +34,14 @@ func Run(ctx context.Context, cfg Config, set *Set, waitTimeout time.Duration) e
 	if err := fga.SetStoreId(storeID); err != nil {
 		return err
 	}
-	if err := set.Migrate(ctx, fga); err != nil {
+	migrator := NewMigrator(fga, migrations)
+	if err := migrator.Migrate(ctx); err != nil {
 		return fmt.Errorf("migrations failed: %w", err)
 	}
-	if err := VerifySchemaVersion(ctx, fga, set.Required()); err != nil {
+	if err := migrator.Verify(ctx); err != nil {
 		return fmt.Errorf("schema version check failed: %w", err)
 	}
-	slog.Info("openfga store at required schema version", "store", storeID, "version", set.Required())
+	slog.Info("openfga store at required schema version", "store", storeID, "version", required)
 	return nil
 }
 

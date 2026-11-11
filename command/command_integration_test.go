@@ -22,7 +22,7 @@ func TestMigrateReadsEnvironment(t *testing.T) {
 	t.Setenv("FGA_STORE_NAME", name)
 	t.Setenv("FGA_WAIT_TIMEOUT", "5s")
 
-	if err := runMigrate(ctx, testSet()); err != nil {
+	if err := runMigrate(ctx, testMigrations()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	fga := fgatest.Client(t)
@@ -40,7 +40,7 @@ func TestMigrateReadsEnvironment(t *testing.T) {
 
 func TestMigrateRejectsBadWaitTimeout(t *testing.T) {
 	t.Setenv("FGA_WAIT_TIMEOUT", "soon")
-	err := runMigrate(context.Background(), testSet())
+	err := runMigrate(context.Background(), testMigrations())
 	if err == nil || !strings.Contains(err.Error(), "config") {
 		t.Fatalf("err = %v, want a config error", err)
 	}

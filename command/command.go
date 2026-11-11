@@ -21,29 +21,29 @@ type migrateEnv struct {
 }
 
 // Migrate reads the FGA_* variables and FGA_WAIT_TIMEOUT, then runs fgamigrator.Run.
-func Migrate(set *fgamigrator.Set) {
-	if err := runMigrate(context.Background(), set); err != nil {
+func Migrate(migrations *fgamigrator.Migrations) {
+	if err := runMigrate(context.Background(), migrations); err != nil {
 		log.Fatal(err)
 	}
 	log.Println("all migrations applied successfully")
 }
 
 // SchemaVersion prints the required schema version, or with -model-digest the model digest.
-func SchemaVersion(set *fgamigrator.Set) {
-	if err := runSchemaVersion(os.Args[1:], os.Stdout, set); err != nil {
+func SchemaVersion(migrations *fgamigrator.Migrations) {
+	if err := runSchemaVersion(os.Args[1:], os.Stdout, migrations); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func runMigrate(ctx context.Context, set *fgamigrator.Set) error {
+func runMigrate(ctx context.Context, migrations *fgamigrator.Migrations) error {
 	var env migrateEnv
 	if err := envconfig.Process("", &env); err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	return fgamigrator.Run(ctx, env.Config, set, env.WaitTimeout)
+	return fgamigrator.Run(ctx, env.Config, migrations, env.WaitTimeout)
 }
 
-func runSchemaVersion(args []string, out io.Writer, set *fgamigrator.Set) error {
+func runSchemaVersion(args []string, out io.Writer, migrations *fgamigrator.Migrations) error {
 	flags := flag.NewFlagSet("schemaversion", flag.ContinueOnError)
 	modelDigest := flags.Bool("model-digest", false, "print sha256:<hex> of the normalised model instead")
 	if err := flags.Parse(args); err != nil {
@@ -53,10 +53,14 @@ func runSchemaVersion(args []string, out io.Writer, set *fgamigrator.Set) error 
 		return err
 	}
 	if !*modelDigest {
-		_, err := fmt.Fprintln(out, set.Required())
+		required, err := migrations.Required()
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, required)
 		return err
 	}
-	digest, err := set.ModelDigest()
+	digest, err := migrations.ModelDigest()
 	if err != nil {
 		return err
 	}

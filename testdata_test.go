@@ -8,11 +8,11 @@ import (
 )
 
 var (
-	//go:embed testdata/v1.fga
+	//go:embed testdata/migrations/0001_baseline.fga
 	v1Model string
-	//go:embed testdata/v2.fga
+	//go:embed testdata/migrations/0002_add_writer.fga
 	v2Model string
-	//go:embed testdata/v3.fga
+	//go:embed testdata/migrations/0003_drop_editor.fga
 	v3Model string
 )
 
@@ -35,11 +35,24 @@ func baseline() Migration {
 	return Migration{Version: 1, Name: "baseline", Model: v1Model}
 }
 
-func mustSet(t *testing.T, ms ...Migration) *Set {
+func addWriter() Migration {
+	return Migration{Version: 2, Name: "add_writer", Model: v2Model}
+}
+
+func dropEditor() Migration {
+	return Migration{Version: 3, Name: "drop_editor", Model: v3Model}
+}
+
+func mustMigrations(t *testing.T, ms ...Migration) *Migrations {
 	t.Helper()
-	s, err := NewSet(len(ms), ms...)
-	if err != nil {
-		t.Fatalf("new set: %v", err)
+	migrations := NewMigrations()
+	for _, m := range ms {
+		if err := migrations.Add(m); err != nil {
+			t.Fatalf("add migration: %v", err)
+		}
 	}
-	return s
+	if err := migrations.Validate(); err != nil {
+		t.Fatalf("validate migrations: %v", err)
+	}
+	return migrations
 }
