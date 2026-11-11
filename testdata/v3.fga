@@ -13,7 +13,3 @@ type document
     define owner: [user]
     define writer: [user] or owner
     define viewer: [user] or writer or viewer from parent
-
-type schema_version
-  relations
-    define applied: [schema_version]

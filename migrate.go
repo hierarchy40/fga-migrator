@@ -52,22 +52,22 @@ func apply(ctx context.Context, fga *client.OpenFgaClient, m Migration) error {
 }
 
 func writeModelIfChanged(ctx context.Context, fga *client.OpenFgaClient, dsl string) error {
+	model, err := effectiveModel(dsl)
+	if err != nil {
+		return fmt.Errorf("parse model: %w", err)
+	}
 	latest, err := LatestModel(ctx, fga)
 	if err != nil {
 		return fmt.Errorf("read latest authorization model: %w", err)
 	}
 	if latest != nil {
-		same, err := sameModel(latest, dsl)
+		same, err := sameModel(latest, model)
 		if err != nil {
 			return fmt.Errorf("compare authorization models: %w", err)
 		}
 		if same {
 			return nil
 		}
-	}
-	model, err := dslToModel(dsl)
-	if err != nil {
-		return fmt.Errorf("parse model: %w", err)
 	}
 	res, err := fga.WriteAuthorizationModel(ctx).Body(client.ClientWriteAuthorizationModelRequest{
 		TypeDefinitions: model.TypeDefinitions,
