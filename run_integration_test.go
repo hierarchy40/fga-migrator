@@ -25,7 +25,7 @@ func verifyByStoreID(ctx context.Context, t *testing.T, storeID string, required
 
 func TestRunCreatesStoreAndIsRepeatable(t *testing.T) {
 	ctx := testContext(t)
-	s := mustSet(t, baseline(), Migration{Version: 2, Name: "add_writer", Model: v2Model})
+	s := mustMigrations(t, baseline(), addWriter())
 	cfg := Config{APIURL: fgatest.APIURL(), StoreName: fgatest.StoreName(t)}
 
 	if err := Run(ctx, cfg, s, time.Second); err != nil {
@@ -49,7 +49,7 @@ func TestRunCreatesStoreAndIsRepeatable(t *testing.T) {
 
 func TestRunAcceptsTrailingSlashInAPIURL(t *testing.T) {
 	ctx := testContext(t)
-	s := mustSet(t, baseline())
+	s := mustMigrations(t, baseline())
 	cfg := Config{APIURL: fgatest.APIURL() + "/", StoreName: fgatest.StoreName(t)}
 
 	if err := Run(ctx, cfg, s, time.Second); err != nil {
@@ -64,7 +64,7 @@ func TestRunAcceptsTrailingSlashInAPIURL(t *testing.T) {
 
 func TestRunFailsOnUnknownStoreID(t *testing.T) {
 	ctx := testContext(t)
-	err := Run(ctx, Config{APIURL: fgatest.APIURL(), StoreID: "01HXXXXXXXXXXXXXXXXXXXXXXX"}, mustSet(t, baseline()), time.Second)
+	err := Run(ctx, Config{APIURL: fgatest.APIURL(), StoreID: "01HXXXXXXXXXXXXXXXXXXXXXXX"}, mustMigrations(t, baseline()), time.Second)
 	if err == nil {
 		t.Fatal("run accepted an unknown store id")
 	}
@@ -73,7 +73,7 @@ func TestRunFailsOnUnknownStoreID(t *testing.T) {
 func TestRunWaitTimesOutWhenUnreachable(t *testing.T) {
 	ctx := testContext(t)
 	start := time.Now()
-	err := Run(ctx, Config{APIURL: "http://127.0.0.1:1", StoreName: "x"}, mustSet(t, baseline()), 3*time.Second)
+	err := Run(ctx, Config{APIURL: "http://127.0.0.1:1", StoreName: "x"}, mustMigrations(t, baseline()), 3*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "not reachable") {
 		t.Fatalf("err = %v, want not reachable", err)
 	}
@@ -95,5 +95,12 @@ func TestFindStore(t *testing.T) {
 	}
 	if got, err := FindStore(ctx, fga, "no-such-store-"+storeID); err != nil || got != "" {
 		t.Fatalf("FindStore(unknown) = %q, %v; want empty", got, err)
+	}
+}
+
+func TestRunRejectsInvalidMigrationsBeforeConnecting(t *testing.T) {
+	err := Run(testContext(t), Config{APIURL: "http://127.0.0.1:1", StoreName: "x"}, NewMigrations(), time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "invalid migrations") {
+		t.Fatalf("err = %v, want invalid migrations", err)
 	}
 }

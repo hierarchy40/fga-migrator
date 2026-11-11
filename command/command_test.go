@@ -12,16 +12,16 @@ import (
 //go:embed testdata/model.fga
 var model string
 
-func testSet() *fgamigrator.Set {
-	return fgamigrator.MustSet(2,
-		fgamigrator.Migration{Version: 1, Name: "baseline", Model: model},
-		fgamigrator.Migration{Version: 2, Name: "noop", Model: model},
-	)
+func testMigrations() *fgamigrator.Migrations {
+	migrations := fgamigrator.NewMigrations()
+	migrations.MustAdd(fgamigrator.Migration{Version: 1, Name: "baseline", Model: model})
+	migrations.MustAdd(fgamigrator.Migration{Version: 2, Name: "noop", Model: model})
+	return migrations
 }
 
 func TestSchemaVersionPrintsRequiredVersion(t *testing.T) {
 	var out bytes.Buffer
-	if err := runSchemaVersion(nil, &out, testSet()); err != nil {
+	if err := runSchemaVersion(nil, &out, testMigrations()); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "2\n" {
@@ -31,10 +31,10 @@ func TestSchemaVersionPrintsRequiredVersion(t *testing.T) {
 
 func TestSchemaVersionPrintsModelDigest(t *testing.T) {
 	var out bytes.Buffer
-	if err := runSchemaVersion([]string{"-model-digest"}, &out, testSet()); err != nil {
+	if err := runSchemaVersion([]string{"-model-digest"}, &out, testMigrations()); err != nil {
 		t.Fatal(err)
 	}
-	want, err := testSet().ModelDigest()
+	want, err := testMigrations().ModelDigest()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,16 @@ func TestSchemaVersionPrintsModelDigest(t *testing.T) {
 
 func TestSchemaVersionRejectsUnknownFlags(t *testing.T) {
 	var out bytes.Buffer
-	if err := runSchemaVersion([]string{"-nope"}, &out, testSet()); err == nil {
+	if err := runSchemaVersion([]string{"-nope"}, &out, testMigrations()); err == nil {
 		t.Fatal("unknown flag accepted")
+	}
+}
+
+func TestSchemaVersionRejectsInvalidMigrations(t *testing.T) {
+	var out bytes.Buffer
+	for _, args := range [][]string{nil, {"-model-digest"}} {
+		if err := runSchemaVersion(args, &out, fgamigrator.NewMigrations()); err == nil {
+			t.Fatalf("schemaversion %v accepted an empty collection", args)
+		}
 	}
 }
