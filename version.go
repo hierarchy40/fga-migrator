@@ -87,16 +87,6 @@ func hasType(model *openfga.AuthorizationModel, typeName string) bool {
 	return false
 }
 
-func hasMarkerRelation(model *openfga.AuthorizationModel) bool {
-	for _, t := range model.TypeDefinitions {
-		if t.Type == markerType {
-			_, ok := t.GetRelations()[markerRelation]
-			return ok
-		}
-	}
-	return false
-}
-
 func markerUser(version int) string {
 	return markerType + ":" + strconv.Itoa(version)
 }

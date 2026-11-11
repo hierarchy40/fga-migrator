@@ -1,6 +1,8 @@
 package fgamigrator
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -35,19 +37,17 @@ func TestNewSetRejectsInvalidSets(t *testing.T) {
 		required int
 		want     string
 	}{
-		"empty":          {nil, 0, "no migrations"},
-		"gap":            {[]Migration{baseline(), {Version: 3, Name: "c", Model: v3Model}}, 3, "contiguous"},
-		"not from one":   {[]Migration{{Version: 2, Name: "b", Model: v2Model}}, 2, "contiguous"},
-		"duplicate":      {[]Migration{baseline(), {Version: 1, Name: "again", Model: v1Model}}, 2, "contiguous"},
-		"behind":         {[]Migration{baseline()}, 2, "want required schema version 2"},
-		"ahead":          {[]Migration{baseline(), {Version: 2, Name: "b", Model: v2Model}}, 1, "want required schema version 1"},
-		"no name":        {[]Migration{{Version: 1, Model: v1Model}}, 1, "no name"},
-		"no model":       {[]Migration{{Version: 1, Name: "baseline"}}, 1, "no model"},
-		"later no model": {[]Migration{baseline(), {Version: 2, Name: "data_only"}}, 2, "no model"},
-		"bad dsl":        {[]Migration{{Version: 1, Name: "baseline", Model: "model\n  schema 1.1\ntype"}}, 1, "model"},
-		"no marker":      {[]Migration{{Version: 1, Name: "baseline", Model: legacyModel}}, 1, "lacks the schema_version type"},
-		"wrong marker relation": {[]Migration{{Version: 1, Name: "baseline",
-			Model: strings.Replace(v1Model, "define applied", "define stamped", 1)}}, 1, "lacks the schema_version type"},
+		"empty":           {nil, 0, "no migrations"},
+		"gap":             {[]Migration{baseline(), {Version: 3, Name: "c", Model: v3Model}}, 3, "contiguous"},
+		"not from one":    {[]Migration{{Version: 2, Name: "b", Model: v2Model}}, 2, "contiguous"},
+		"duplicate":       {[]Migration{baseline(), {Version: 1, Name: "again", Model: v1Model}}, 2, "contiguous"},
+		"behind":          {[]Migration{baseline()}, 2, "want required schema version 2"},
+		"ahead":           {[]Migration{baseline(), {Version: 2, Name: "b", Model: v2Model}}, 1, "want required schema version 1"},
+		"no name":         {[]Migration{{Version: 1, Model: v1Model}}, 1, "no name"},
+		"no model":        {[]Migration{{Version: 1, Name: "baseline"}}, 1, "no model"},
+		"later no model":  {[]Migration{baseline(), {Version: 2, Name: "data_only"}}, 2, "no model"},
+		"bad dsl":         {[]Migration{{Version: 1, Name: "baseline", Model: "model\n  schema 1.1\ntype"}}, 1, "model"},
+		"declares marker": {[]Migration{{Version: 1, Name: "baseline", Model: v1Model + handWrittenMarker}}, 1, "reserved schema_version type"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestModelDigestIsTheHighestVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := modelDigest(v2Model)
+	want, err := modelDigest(mustEffective(t, v2Model))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,21 +126,34 @@ func TestMarkerRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSameModelDetectsLegacyModel(t *testing.T) {
-	current, err := dslToModel(v1Model)
+func TestModelDigestMatchesAHandWrittenMarkerType(t *testing.T) {
+	digest, err := mustSet(t, baseline()).ModelDigest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	same, err := sameModel(current, v1Model)
-	if err != nil || !same {
+	handWritten, err := normaliseDSL(v1Model + handWrittenMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(handWritten))); digest != want {
+		t.Fatalf("digest = %q, want %q", digest, want)
+	}
+}
+
+func TestEffectiveModelAddsTheMarkerType(t *testing.T) {
+	model := mustEffective(t, v1Model)
+	last := model.TypeDefinitions[len(model.TypeDefinitions)-1]
+	if _, ok := last.GetRelations()[markerRelation]; last.Type != markerType || !ok {
+		t.Fatalf("last type = %q with relations %v, want the marker type", last.Type, last.GetRelations())
+	}
+	unmarked, err := dslToModel(v1Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, err := sameModel(model, mustEffective(t, v1Model)); err != nil || !same {
 		t.Fatalf("sameModel(v1, v1) = %v, %v", same, err)
 	}
-	legacy, err := dslToModel(legacyModel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	same, err = sameModel(legacy, v1Model)
-	if err != nil || same {
-		t.Fatalf("sameModel(legacy, v1) = %v, %v", same, err)
+	if same, err := sameModel(unmarked, model); err != nil || same {
+		t.Fatalf("sameModel(unmarked v1, v1) = %v, %v", same, err)
 	}
 }

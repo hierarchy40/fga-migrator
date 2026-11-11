@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hierarchy40/fga-migrator/fgatest"
+	openfga "github.com/openfga/go-sdk"
 	"github.com/openfga/go-sdk/client"
 )
 
@@ -84,13 +85,23 @@ func markerUsers(versions ...int) []string {
 	return out
 }
 
-func writeDSL(ctx context.Context, t *testing.T, fga *client.OpenFgaClient, dsl string) {
+func writeUnmarked(ctx context.Context, t *testing.T, fga *client.OpenFgaClient, dsl string) {
 	t.Helper()
 	model, err := dslToModel(dsl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = fga.WriteAuthorizationModel(ctx).Body(client.ClientWriteAuthorizationModelRequest{
+	writeModel(ctx, t, fga, model)
+}
+
+func writeMarked(ctx context.Context, t *testing.T, fga *client.OpenFgaClient, dsl string) {
+	t.Helper()
+	writeModel(ctx, t, fga, mustEffective(t, dsl))
+}
+
+func writeModel(ctx context.Context, t *testing.T, fga *client.OpenFgaClient, model *openfga.AuthorizationModel) {
+	t.Helper()
+	_, err := fga.WriteAuthorizationModel(ctx).Body(client.ClientWriteAuthorizationModelRequest{
 		TypeDefinitions: model.TypeDefinitions,
 		SchemaVersion:   model.SchemaVersion,
 		Conditions:      model.Conditions,
@@ -117,11 +128,27 @@ func check(ctx context.Context, t *testing.T, fga *client.OpenFgaClient, user, r
 }
 
 func latestIs(ctx context.Context, fga *client.OpenFgaClient, dsl string) (bool, error) {
+	want, err := effectiveModel(dsl)
+	if err != nil {
+		return false, err
+	}
+	return latestIsModel(ctx, fga, want)
+}
+
+func latestIsUnmarked(ctx context.Context, fga *client.OpenFgaClient, dsl string) (bool, error) {
+	want, err := dslToModel(dsl)
+	if err != nil {
+		return false, err
+	}
+	return latestIsModel(ctx, fga, want)
+}
+
+func latestIsModel(ctx context.Context, fga *client.OpenFgaClient, want *openfga.AuthorizationModel) (bool, error) {
 	latest, err := LatestModel(ctx, fga)
 	if err != nil || latest == nil {
 		return false, err
 	}
-	return sameModel(latest, dsl)
+	return sameModel(latest, want)
 }
 
 func assertAtVersion(ctx context.Context, t *testing.T, s *Set, fga *client.OpenFgaClient) {
@@ -138,17 +165,20 @@ func assertAtVersion(ctx context.Context, t *testing.T, s *Set, fga *client.Open
 func renameSet(seen map[string]string) *Set {
 	observe := func(step string) Step {
 		return func(ctx context.Context, fga *client.OpenFgaClient) error {
-			for name, dsl := range map[string]string{"legacy": legacyModel, "v1": v1Model, "v2": v2Model, "v3": v3Model} {
+			seen[step] = "none"
+			if legacy, err := latestIsUnmarked(ctx, fga, v1Model); err != nil || legacy {
+				seen[step] = "legacy"
+				return err
+			}
+			for name, dsl := range map[string]string{"v1": v1Model, "v2": v2Model, "v3": v3Model} {
 				same, err := latestIs(ctx, fga, dsl)
 				if err != nil {
 					return err
 				}
 				if same {
 					seen[step] = name
-					return nil
 				}
 			}
-			seen[step] = "none"
 			return nil
 		}
 	}
@@ -259,7 +289,7 @@ func TestMigrateRefusesDowngrade(t *testing.T) {
 func TestMigrateLegacyModelWithoutMarkerType(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	writeDSL(ctx, t, fga, legacyModel)
+	writeUnmarked(ctx, t, fga, v1Model)
 	writeTuples(ctx, t, fga,
 		client.ClientTupleKey{User: "user:1", Relation: "viewer", Object: "folder:1"},
 		client.ClientTupleKey{User: "folder:1", Relation: "parent", Object: "document:1"},
@@ -281,7 +311,7 @@ func TestMigrateLegacyModelWithoutMarkerType(t *testing.T) {
 func TestMigrateAppliesMigrationsOneAtATime(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	writeDSL(ctx, t, fga, legacyModel)
+	writeUnmarked(ctx, t, fga, v1Model)
 	writeTuples(ctx, t, fga, client.ClientTupleKey{User: "user:7", Relation: "editor", Object: "document:1"})
 
 	seen := map[string]string{}
@@ -363,12 +393,12 @@ func TestMigrateResumesAfterAFailedMigration(t *testing.T) {
 func TestMigrateAfterOldWriterOverwroteModel(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	writeDSL(ctx, t, fga, legacyModel)
+	writeUnmarked(ctx, t, fga, v1Model)
 	writeTuples(ctx, t, fga, client.ClientTupleKey{User: "user:7", Relation: "editor", Object: "document:1"})
 	mustMigrate(ctx, t, renameSet(map[string]string{}), fga)
 	stamped := markers(ctx, t, fga)
 
-	writeDSL(ctx, t, fga, legacyModel)
+	writeUnmarked(ctx, t, fga, v1Model)
 
 	if v := storedVersion(ctx, t, fga); v != 0 {
 		t.Fatalf("version under a model without the marker type = %d, want 0", v)
@@ -398,7 +428,7 @@ func TestMigrateRepairsDriftedModelAtRequiredVersion(t *testing.T) {
 	fga, _ := fgatest.NewStore(ctx, t)
 	s := mustSet(t, baseline(), Migration{Version: 2, Name: "add_writer", Model: v2Model})
 	mustMigrate(ctx, t, s, fga)
-	writeDSL(ctx, t, fga, v1Model)
+	writeMarked(ctx, t, fga, v1Model)
 
 	mustMigrate(ctx, t, s, fga)
 
@@ -436,7 +466,7 @@ func TestStoredVersionWithoutModel(t *testing.T) {
 func TestStoredVersionWithoutMarkers(t *testing.T) {
 	ctx := testContext(t)
 	fga, _ := fgatest.NewStore(ctx, t)
-	writeDSL(ctx, t, fga, v1Model)
+	writeMarked(ctx, t, fga, v1Model)
 	if v := storedVersion(ctx, t, fga); v != 0 {
 		t.Fatalf("version = %d, want 0", v)
 	}

@@ -18,7 +18,7 @@ type Step func(ctx context.Context, fga *client.OpenFgaClient) error
 type Migration struct {
 	Version int
 	Name    string
-	Model   string // full DSL as of this version
+	Model   string // full DSL as of this version, without the schema_version type
 	Before  Step   // against the model stored before this version
 	After   Step   // against this version's Model
 }
@@ -54,11 +54,17 @@ func (s *Set) Required() int { return s.required }
 // Migrations returns a copy in ascending version order.
 func (s *Set) Migrations() []Migration { return slices.Clone(s.migrations) }
 
-// Model is the DSL of the highest version.
+// Model is the DSL of the highest version, without the schema_version type.
 func (s *Set) Model() string { return s.migrations[len(s.migrations)-1].Model }
 
-// ModelDigest is sha256:<hex> of the normalised Model, blind to comments and whitespace.
-func (s *Set) ModelDigest() (string, error) { return modelDigest(s.Model()) }
+// ModelDigest is sha256:<hex> of the normalised stored model, blind to comments and whitespace.
+func (s *Set) ModelDigest() (string, error) {
+	model, err := effectiveModel(s.Model())
+	if err != nil {
+		return "", err
+	}
+	return modelDigest(model)
+}
 
 func (s *Set) pending(stored int) []Migration {
 	var out []Migration
@@ -84,12 +90,8 @@ func validate(ms []Migration, required int) error {
 		if m.Model == "" {
 			return fmt.Errorf("migration %d %s has no model: every version declares its full model snapshot", m.Version, m.Name)
 		}
-		model, err := dslToModel(m.Model)
-		if err != nil {
+		if _, err := effectiveModel(m.Model); err != nil {
 			return fmt.Errorf("migration %d %s model: %w", m.Version, m.Name, err)
-		}
-		if !hasMarkerRelation(model) {
-			return fmt.Errorf("migration %d %s model lacks the %s type with relation %s", m.Version, m.Name, markerType, markerRelation)
 		}
 	}
 	if len(ms) != required {
