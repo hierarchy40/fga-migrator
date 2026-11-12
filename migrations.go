@@ -239,7 +239,7 @@ func (m *Migrations) entry(version int, name string) (*entry, error) {
 	}
 	e, ok := m.entries[version]
 	if !ok {
-		e = &entry{Migration: Migration{Version: version, Name: name}}
+		e = &entry{Version: version, Name: name}
 		m.entries[version] = e
 		return e, nil
 	}
