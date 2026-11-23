@@ -16,7 +16,7 @@ import (
 )
 
 // Image is the OpenFGA image the harness runs.
-const Image = "openfga/openfga:v1.22.1"
+const Image = "openfga/openfga:v1.23.0"
 
 var (
 	apiURL    string
