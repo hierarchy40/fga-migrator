@@ -25,6 +25,20 @@ jobs:
         with:
           version: v2.15.0
 
+  fix:
+    name: Go Fix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # public repo, so no shared go-fix workflow
+      - name: go fix -diff
+        run: |
+          go fix -diff ./...
+          go fix -diff -tags integration ./...
+
   unit:
     name: Unit Tests
     runs-on: ubuntu-latest
